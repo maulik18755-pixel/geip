@@ -1,0 +1,23 @@
+{
+  "spine_id": "world_electricity_mix_2024",
+  "source": "Our World in Data - owid/energy-data (master)",
+  "geography": "World",
+  "year": 2024,
+  "unit": "TWh",
+  "metric_family": "electricity",
+  "reconciliation_rule": "biofuel_electricity is a SUBSET of other_renewable_electricity; do NOT add separately",
+  "by_source_TWh": {
+    "coal": 10538.9,
+    "gas": 6882.7,
+    "oil": 853.8,
+    "nuclear": 2777.1,
+    "hydro": 4433.6,
+    "solar": 2142.7,
+    "wind": 2509.5,
+    "other_renewable_incl_biofuel": 791.8
+  },
+  "reported_total_TWh": 30930.2,
+  "computed_sum_TWh": 30930.1,
+  "reconciliation_gap_TWh": 0.1,
+  "passes": true
+}
