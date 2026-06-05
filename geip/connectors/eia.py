@@ -38,9 +38,11 @@ _PAGE_SIZE = 5000
 _UNIT_TO_TWH: dict[str, float] = {
     "billion kWh": 1.0,           # billion kWh == TWh exactly
     "BkWh": 1.0,
+    "BKWH": 1.0,                  # EIA API v2 unit code for billion kilowatt-hours
     "TWh": 1.0,
     "quad BTU": 293.07153,        # 1 quad = 10^15 BTU; 1 BTU = 2.931e-4 Wh
     "Quadrillion Btu": 293.07153,
+    "QBTU": 293.07153,            # EIA API v2 unit code for quadrillion Btu
     # Natural gas: 1 Bcf ≈ 1.027 × 10^15 BTU → 1.027 × 293.07 TWh/quad
     # EIA reports NG consumption in Tcf (trillion cubic feet) annually
     "Trillion Cubic Feet": 293.07153 * 1.027,
@@ -49,6 +51,7 @@ _UNIT_TO_TWH: dict[str, float] = {
     # 1 mb/d/year ≈ 1 628 TWh; stored as mb/d → TWh/yr
     "Million Barrels per Day": 1628.0,
     "mb/d": 1628.0,
+    "million barrels per day": 1628.0,  # STEO unit string (lowercase)
     # Short tons of coal: 1 short ton coal ≈ 20.169 MMBTU; MMBTU × 2.931×10-4 = TWh
     "Million Short Tons": 20.169 * 1e6 * 2.931e-4 / 1e6,  # TWh per million short tons
     "MMst": 20.169 * 1e6 * 2.931e-4 / 1e6,
@@ -81,32 +84,32 @@ class _SeriesSpec:
 
 
 # International historical series to fetch.
-# productId and activityId values are from the EIA /v2/international/ metadata endpoint.
-# Reference: https://api.eia.gov/v2/international/?api_key=<key>
+# productId and activityId values verified against GET /v2/international/data/ with
+# facets[unit][]=BKWH (electricity) and facets[unit][]=QBTU (primary energy).
 _INTERNATIONAL_SERIES: list[_SeriesSpec] = [
-    # Primary energy consumption
-    _SeriesSpec("57",  "2", EnergyType.OIL,  MetricFamily.PRIMARY_ENERGY, "primary_energy_consumption", "quad BTU"),
-    _SeriesSpec("26",  "2", EnergyType.GAS,  MetricFamily.PRIMARY_ENERGY, "primary_energy_consumption", "quad BTU"),
-    _SeriesSpec("33",  "2", EnergyType.COAL, MetricFamily.PRIMARY_ENERGY, "primary_energy_consumption", "quad BTU"),
-    # Electricity generation by fuel (billion kWh = TWh)
-    _SeriesSpec("7",   "12", EnergyType.COAL,           MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
-    _SeriesSpec("8",   "12", EnergyType.GAS,            MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
-    _SeriesSpec("9",   "12", EnergyType.OIL,            MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
-    _SeriesSpec("15",  "12", EnergyType.NUCLEAR,        MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
-    _SeriesSpec("2",   "12", EnergyType.HYDRO,          MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
-    _SeriesSpec("16",  "12", EnergyType.SOLAR,          MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
-    _SeriesSpec("17",  "12", EnergyType.WIND,           MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
-    _SeriesSpec("29",  "12", EnergyType.OTHER_RENEWABLE, MetricFamily.ELECTRICITY, "electricity_generation", "billion kWh"),
+    # Primary energy consumption (activityId=2, API unit code QBTU)
+    _SeriesSpec("5",   "2", EnergyType.OIL,  MetricFamily.PRIMARY_ENERGY, "primary_energy_consumption", "QBTU"),
+    _SeriesSpec("26",  "2", EnergyType.GAS,  MetricFamily.PRIMARY_ENERGY, "primary_energy_consumption", "QBTU"),
+    _SeriesSpec("7",   "2", EnergyType.COAL, MetricFamily.PRIMARY_ENERGY, "primary_energy_consumption", "QBTU"),
+    # Electricity generation by fuel (activityId=12, API unit code BKWH = TWh)
+    _SeriesSpec("30",  "12", EnergyType.COAL,    MetricFamily.ELECTRICITY, "electricity_generation", "BKWH"),
+    _SeriesSpec("31",  "12", EnergyType.GAS,     MetricFamily.ELECTRICITY, "electricity_generation", "BKWH"),
+    _SeriesSpec("32",  "12", EnergyType.OIL,     MetricFamily.ELECTRICITY, "electricity_generation", "BKWH"),
+    _SeriesSpec("27",  "12", EnergyType.NUCLEAR, MetricFamily.ELECTRICITY, "electricity_generation", "BKWH"),
+    _SeriesSpec("33",  "12", EnergyType.HYDRO,   MetricFamily.ELECTRICITY, "electricity_generation", "BKWH"),
+    _SeriesSpec("116", "12", EnergyType.SOLAR,   MetricFamily.ELECTRICITY, "electricity_generation", "BKWH"),
+    _SeriesSpec("37",  "12", EnergyType.WIND,    MetricFamily.ELECTRICITY, "electricity_generation", "BKWH"),
+    # Note: OTHER_RENEWABLE omitted — no single EIA product maps cleanly without
+    # double-counting Solar/Wind. Phase 2 will handle via sub-series summation.
 ]
 
 
 # STEO world-level series.
-# seriesId values from GET /v2/steo/ metadata.
-# Each tuple: (seriesId, EnergyType, MetricFamily, metric, eia_unit)
+# seriesId values verified against GET /v2/steo/data/.
+# NGTC_WORLD and CLTC_WORLD do not exist in the API; only PATC_WORLD is available
+# at the world level. Each tuple: (seriesId, EnergyType, MetricFamily, metric, eia_unit)
 _STEO_SERIES: list[tuple[str, EnergyType, MetricFamily, str, str]] = [
-    ("PATC_WORLD", EnergyType.OIL,  MetricFamily.PRIMARY_ENERGY, "consumption", "mb/d"),
-    ("NGTC_WORLD", EnergyType.GAS,  MetricFamily.PRIMARY_ENERGY, "consumption", "Trillion Cubic Feet"),
-    ("CLTC_WORLD", EnergyType.COAL, MetricFamily.PRIMARY_ENERGY, "consumption", "Million Short Tons"),
+    ("PATC_WORLD", EnergyType.OIL, MetricFamily.PRIMARY_ENERGY, "consumption", "mb/d"),
 ]
 
 # STEO scenario label (single reference case)
@@ -150,8 +153,10 @@ class _EIAClient:
             resp.raise_for_status()
             body = resp.json()
             data = body.get("response", {}).get("data", [])
+            if not isinstance(data, list):
+                break  # metadata endpoint returns data as a dict — not a data route
             results.extend(data)
-            total = body.get("response", {}).get("total", len(data))
+            total = int(str(body.get("response", {}).get("total", len(data))))
             offset += len(data)
             if offset >= total or not data:
                 break
@@ -197,7 +202,7 @@ class EIAInternationalConnector:
             }
             if since:
                 params["start"] = str(since.year + 1)
-            raw = self._client.get_all("international", params)
+            raw = self._client.get_all("international/data/", params)
             for row in raw:
                 row["_spec_product_id"] = spec.product_id
                 row["_spec_activity_id"] = spec.activity_id
@@ -286,7 +291,7 @@ class EIASTEOConnector:
             }
             if since:
                 params["start"] = since.strftime("%Y-%m")
-            raw = self._client.get_all("steo", params)
+            raw = self._client.get_all("steo/data/", params)
             for row in raw:
                 row["_series_id"] = series_id
                 row["_energy_type"] = etype
@@ -380,7 +385,7 @@ class EIAIEOConnector:
         }
         if since:
             params["start"] = str(since.year + 1)
-        rows = self._client.get_all("aeo", params)
+        rows = self._client.get_all("aeo/data/", params)
         return rows
 
     def normalize(self, raw: list[dict]) -> list[FactRecord]:

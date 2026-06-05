@@ -40,28 +40,50 @@ def _set_key(monkeypatch: pytest.MonkeyPatch) -> None:
 # Fixtures: minimal EIA API v2 response payloads
 # ---------------------------------------------------------------------------
 
-# International: two rows — one oil primary energy, one coal electricity
+# International: two rows — one oil primary energy, one coal electricity.
+# Unit codes ("QBTU", "BKWH") match real EIA API v2 /international/data/ responses.
 _INTL_RAW: list[dict[str, Any]] = [
     {
         "period": "2022",
         "countryRegionName": "World",
         "value": "200",
-        "unit": "quad BTU",
-        "lastHistoricalPeriod": "2022",
+        "unit": "QBTU",            # real API code: quadrillion Btu
         "releaseDate": "2023-06-01",
-        "_spec_product_id": "57",
+        "_spec_product_id": "5",   # Petroleum and other liquids
         "_spec_activity_id": "2",
     },
     {
         "period": "2022",
         "countryRegionName": "World",
         "value": "10000",
-        "unit": "billion kWh",
-        "lastHistoricalPeriod": "2022",
+        "unit": "BKWH",            # real API code: billion kilowatt-hours
         "releaseDate": "2023-06-01",
-        "_spec_product_id": "7",
+        "_spec_product_id": "30",  # Coal electricity generation
         "_spec_activity_id": "12",
     },
+]
+
+# Verbatim row captured from GET /v2/international/data/ (productId=30, activityId=12,
+# countryRegionId=WORL, start/end=2022) — used as regression anchor for the BKWH path.
+_INTL_REAL_SAMPLE: list[dict[str, Any]] = [
+    {
+        "period": "2022",
+        "productId": "30",
+        "productName": "Coal",
+        "activityId": "12",
+        "activityName": "Generation",
+        "countryRegionId": "WORL",
+        "countryRegionName": "World",
+        "countryRegionTypeId": "r",
+        "countryRegionTypeName": "Region",
+        "dataFlagId": None,
+        "dataFlagDescription": None,
+        "unitName": "billion kilowatthours",
+        "value": "9866.94913482",
+        "unit": "BKWH",
+        "_spec_product_id": "30",
+        "_spec_activity_id": "12",
+    }
 ]
 
 # STEO: past period + future period in same series
@@ -166,7 +188,7 @@ def test_international_metric_family_matches_series(intl):
 
 def test_international_value_conversion(intl):
     facts = intl.normalize(_INTL_RAW)
-    # 200 quad BTU × 293.07153 = 58614.306 TWh
+    # 200 QBTU × 293.07153 TWh/quad = 58614.306 TWh
     oil_facts = [f for f in facts if f.metric_family == MetricFamily.PRIMARY_ENERGY]
     assert oil_facts
     assert abs(oil_facts[0].value - 200 * 293.07153) < 0.01
@@ -176,7 +198,19 @@ def test_international_electricity_value(intl):
     facts = intl.normalize(_INTL_RAW)
     elec_facts = [f for f in facts if f.metric_family == MetricFamily.ELECTRICITY]
     assert elec_facts
-    assert abs(elec_facts[0].value - 10000.0) < 0.01  # billion kWh == TWh
+    assert abs(elec_facts[0].value - 10000.0) < 0.01  # BKWH == TWh, factor 1.0
+
+
+def test_real_bkwh_response_shape(intl):
+    """Regression: real API returns unit='BKWH', not 'billion kWh'. Both must parse."""
+    facts = intl.normalize(_INTL_REAL_SAMPLE)
+    assert len(facts) == 1
+    f = facts[0]
+    assert f.unit == "TWh"
+    assert f.geography == "World"
+    assert f.period == date(2022, 1, 1)
+    # BKWH → TWh factor is 1.0; value must round-trip exactly
+    assert abs(f.value - 9866.94913482) < 0.001
 
 
 def test_international_skips_empty_values(intl):
@@ -294,8 +328,18 @@ def test_to_twh_billion_kwh():
     assert _to_twh(1.0, "billion kWh") == 1.0
 
 
+def test_to_twh_bkwh():
+    # EIA API v2 uses "BKWH" as the unit code for billion kilowatt-hours
+    assert _to_twh(1.0, "BKWH") == 1.0
+
+
 def test_to_twh_quad_btu():
     assert abs(_to_twh(1.0, "quad BTU") - 293.07153) < 0.001
+
+
+def test_to_twh_qbtu():
+    # EIA API v2 uses "QBTU" as the unit code for quadrillion Btu
+    assert abs(_to_twh(1.0, "QBTU") - 293.07153) < 0.001
 
 
 def test_to_twh_unknown_unit_raises():
