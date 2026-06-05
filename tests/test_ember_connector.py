@@ -2,11 +2,10 @@
 
 Critical invariants tested:
   - Bioenergy is folded into OTHER_RENEWABLE, not emitted as a separate type.
-  - Aggregate subcategories (Total generation, Fossil, Renewables …) are skipped.
+  - Aggregate series (Total generation, Fossil, Renewables …) are skipped.
   - Generation records carry unit="TWh"; capacity records carry unit="GW".
   - No record is ever is_projection=True (Ember is historical only).
   - Missing EMBER_API_KEY raises before any HTTP call.
-  - Unexpected unit string from Ember raises ValueError in normalize().
   - Orphan bioenergy (bioenergy row with no paired Other renewables row)
     is still emitted as OTHER_RENEWABLE rather than silently dropped.
 """
@@ -17,8 +16,16 @@ from datetime import date
 import pytest
 
 from geip.connectors.base import SourceConnector
-from geip.connectors.ember import EmberConnector, _BIOENERGY_LABEL
+from geip.connectors.ember import EmberConnector, _BIOENERGY_LABEL, _ENDPOINT_SPECS
 from geip.core.schema import EnergyType, MetricFamily
+
+# ---------------------------------------------------------------------------
+# Spec handles (shorthand for fixtures)
+# ---------------------------------------------------------------------------
+
+_GEN_SPEC = _ENDPOINT_SPECS[0]   # electricity-generation/yearly
+_CAP_SPEC = _ENDPOINT_SPECS[1]   # installed-capacity/monthly
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -35,39 +42,35 @@ def ember(monkeypatch):
 
 
 # Full representative payload: all 8 fuel types, aggregates, and capacity rows.
+# New API fields: entity, date (str), series, generation_twh / capacity_gw, _spec.
 _EMBER_RAW: list[dict] = [
     # Individual fuel generation
-    {"country_or_region": "World", "year": 2023, "category": "Fossil",     "subcategory": "Coal",           "variable": "Generation",         "unit": "TWh", "value": "10000"},
-    {"country_or_region": "World", "year": 2023, "category": "Fossil",     "subcategory": "Gas",            "variable": "Generation",         "unit": "TWh", "value": "6500"},
-    {"country_or_region": "World", "year": 2023, "category": "Fossil",     "subcategory": "Other fossil",   "variable": "Generation",         "unit": "TWh", "value": "800"},
-    {"country_or_region": "World", "year": 2023, "category": "Low-carbon", "subcategory": "Nuclear",        "variable": "Generation",         "unit": "TWh", "value": "2700"},
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Hydro",          "variable": "Generation",         "unit": "TWh", "value": "4400"},
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Solar",          "variable": "Generation",         "unit": "TWh", "value": "1800"},
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Wind",           "variable": "Generation",         "unit": "TWh", "value": "2200"},
+    {"entity": "World", "date": "2023", "series": "Coal",             "is_aggregate_series": False, "generation_twh": 10000.0, "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Gas",              "is_aggregate_series": False, "generation_twh": 6500.0,  "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Other fossil",     "is_aggregate_series": False, "generation_twh": 800.0,   "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Nuclear",          "is_aggregate_series": False, "generation_twh": 2700.0,  "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Hydro",            "is_aggregate_series": False, "generation_twh": 4400.0,  "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Solar",            "is_aggregate_series": False, "generation_twh": 1800.0,  "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Wind",             "is_aggregate_series": False, "generation_twh": 2200.0,  "_spec": _GEN_SPEC},
     # Other renewables (exclusive of bioenergy in Ember's schema)
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Other renewables", "variable": "Generation",       "unit": "TWh", "value": "400"},
+    {"entity": "World", "date": "2023", "series": "Other renewables", "is_aggregate_series": False, "generation_twh": 400.0,   "_spec": _GEN_SPEC},
     # Bioenergy — must be folded into OTHER_RENEWABLE, not emitted separately
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Bioenergy",      "variable": "Generation",         "unit": "TWh", "value": "600"},
-    # Aggregates — must be skipped to prevent double-counting
-    {"country_or_region": "World", "year": 2023, "category": "Total",      "subcategory": "Total generation","variable": "Generation",        "unit": "TWh", "value": "29400"},
-    {"country_or_region": "World", "year": 2023, "category": "Fossil",     "subcategory": "Fossil",         "variable": "Generation",         "unit": "TWh", "value": "17300"},
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Renewables",     "variable": "Generation",         "unit": "TWh", "value": "9400"},
-    {"country_or_region": "World", "year": 2023, "category": "Low-carbon", "subcategory": "Low-carbon",     "variable": "Generation",         "unit": "TWh", "value": "11800"},
-    # Capacity
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Solar",          "variable": "Installed capacity", "unit": "GW",  "value": "1600"},
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Wind",           "variable": "Installed capacity", "unit": "GW",  "value": "900"},
+    {"entity": "World", "date": "2023", "series": "Bioenergy",        "is_aggregate_series": False, "generation_twh": 600.0,   "_spec": _GEN_SPEC},
+    # Aggregates — must be skipped (series not in series_map)
+    {"entity": "World", "date": "2023", "series": "Total generation", "is_aggregate_series": True,  "generation_twh": 29400.0, "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Fossil",           "is_aggregate_series": True,  "generation_twh": 17300.0, "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Renewables",       "is_aggregate_series": True,  "generation_twh": 9400.0,  "_spec": _GEN_SPEC},
+    {"entity": "World", "date": "2023", "series": "Low-carbon",       "is_aggregate_series": True,  "generation_twh": 11800.0, "_spec": _GEN_SPEC},
+    # Capacity (monthly; actual API returns "YYYY-MM-DD")
+    # "Wind" is the aggregate of Offshore+Onshore — included because exclude_aggregate_series=False
+    {"entity": "World", "date": "2023-01-01", "series": "Solar", "is_aggregate_series": False, "capacity_gw": 1600.0, "_spec": _CAP_SPEC},
+    {"entity": "World", "date": "2023-01-01", "series": "Wind",  "is_aggregate_series": True,  "capacity_gw": 900.0,  "_spec": _CAP_SPEC},
 ]
 
 # Payload where Bioenergy has NO paired "Other renewables" row (orphan bioenergy).
 _ORPHAN_BIO_RAW: list[dict] = [
-    {"country_or_region": "Iceland", "year": 2023, "category": "Renewables", "subcategory": "Bioenergy",
-     "variable": "Generation", "unit": "TWh", "value": "2.5"},
-]
-
-# Payload with a bad unit to test the hard-error path.
-_BAD_UNIT_RAW: list[dict] = [
-    {"country_or_region": "World", "year": 2023, "category": "Renewables", "subcategory": "Solar",
-     "variable": "Generation", "unit": "GWh", "value": "1000"},  # GWh is wrong for Generation
+    {"entity": "Iceland", "date": "2023", "series": "Bioenergy", "is_aggregate_series": False,
+     "generation_twh": 2.5, "_spec": _GEN_SPEC},
 ]
 
 
@@ -99,8 +102,6 @@ def test_bioenergy_folded_into_other_renewable(ember):
 
 def test_no_standalone_bioenergy_record(ember):
     facts = ember.normalize(_EMBER_RAW)
-    # EnergyType.BIOENERGY does not exist in the schema; confirm nothing leaks through
-    # by checking no record has a value_type outside the known enum members.
     known_types = set(EnergyType)
     for f in facts:
         assert f.energy_type in known_types
@@ -120,7 +121,6 @@ def test_orphan_bioenergy_still_emitted(ember):
 
 def test_aggregate_subcategories_skipped(ember):
     facts = ember.normalize(_EMBER_RAW)
-    # Aggregate rows carry values like 29400, 17300, 9400, 11800 — none should appear.
     values = {f.value for f in facts}
     for aggregate_val in (29400.0, 17300.0, 9400.0, 11800.0):
         assert aggregate_val not in values, f"Aggregate value {aggregate_val} leaked into facts"
@@ -156,11 +156,6 @@ def test_capacity_units_are_gw(ember):
     assert all(f.unit == "GW" for f in cap), [f.unit for f in cap]
 
 
-def test_wrong_unit_raises(ember):
-    with pytest.raises(ValueError, match="GWh"):
-        ember.normalize(_BAD_UNIT_RAW)
-
-
 # ---------------------------------------------------------------------------
 # Projection invariant
 # ---------------------------------------------------------------------------
@@ -192,9 +187,10 @@ def test_capacity_values(ember):
     assert abs(solar_cap[0].value - 1600.0) < 0.01
 
 
-def test_period_is_jan_1(ember):
-    facts = ember.normalize(_EMBER_RAW)
-    for f in facts:
+def test_generation_period_is_jan_1(ember):
+    gen_facts = [f for f in ember.normalize(_EMBER_RAW)
+                 if f.metric_family is MetricFamily.ELECTRICITY]
+    for f in gen_facts:
         assert f.period.month == 1 and f.period.day == 1, f.period
 
 
@@ -203,13 +199,18 @@ def test_source_id(ember):
     assert all(f.source_id == "ember" for f in facts)
 
 
-def test_skips_empty_values(ember):
-    raw = [dict(_EMBER_RAW[0], value="")]
+def test_skips_null_value(ember):
+    raw = [dict(_EMBER_RAW[0], generation_twh=None)]
     assert ember.normalize(raw) == []
 
 
-def test_skips_missing_year(ember):
-    raw = [dict(_EMBER_RAW[0], year=None)]
+def test_skips_missing_date(ember):
+    raw = [dict(_EMBER_RAW[0], date=None)]
+    assert ember.normalize(raw) == []
+
+
+def test_skips_row_without_spec(ember):
+    raw = [{"entity": "World", "date": "2023", "series": "Coal", "generation_twh": 100.0}]
     assert ember.normalize(raw) == []
 
 
@@ -225,7 +226,6 @@ def test_validate_ok(ember):
 
 def test_validate_catches_negative(ember, monkeypatch):
     facts = ember.normalize(_EMBER_RAW)
-    # Bypass frozen dataclass to inject a negative value via object.__setattr__
     bad = facts[0]
     from geip.core.schema import FactRecord
     bad_fact = FactRecord(
