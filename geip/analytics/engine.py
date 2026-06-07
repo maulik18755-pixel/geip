@@ -16,10 +16,12 @@ Rules enforced here (from CLAUDE.md):
     metric_family, so cross-family comparisons can never happen.
 
 Usage:
-    engine = ReconciliationEngine(threshold_pct=5.0)
+    engine = ReconciliationEngine(threshold_pct=5.0, min_abs_twh=1.0)
     log = engine.compare(spine_facts=owid_facts, challenger_facts=eia_facts)
     for d in engine.flagged(log):
         alert(d)
+    for d in engine.floor_suppressed(log):
+        audit(d)  # tiny-value pairs: recorded but not flagged
 """
 from __future__ import annotations
 
@@ -52,8 +54,10 @@ class DiscrepancyRecord:
 
     pct_delta: signed percentage — positive means challenger is higher than
     spine, negative means lower. None when spine_value == 0 (undefined).
-    flagged: True when abs(pct_delta) > threshold_pct. Always False when
-    pct_delta is None (absolute-delta thresholding is a Phase 2 extension).
+    flagged: True when abs(pct_delta) > threshold_pct AND below_floor is False.
+    below_floor: True when both spine_value and challenger_value are below
+    min_abs_twh. The record is still emitted for audit; flagged is suppressed
+    to prevent near-zero-denominator artifacts from dominating the flag list.
     """
     # Series identity
     geography: str
@@ -72,7 +76,8 @@ class DiscrepancyRecord:
     # Comparison result
     abs_delta: float              # |challenger_value - spine_value|
     pct_delta: Optional[float]    # (challenger - spine) / spine × 100, signed
-    flagged: bool                 # abs(pct_delta) > threshold_pct
+    flagged: bool                 # abs(pct_delta) > threshold_pct, and not below_floor
+    below_floor: bool             # both values < min_abs_twh; flag suppressed, record kept
     threshold_pct: float
     detected_at: datetime
 
@@ -87,18 +92,27 @@ class DiscrepancyRecord:
 class ReconciliationEngine:
     """Compare challenger FactRecords against the OWID spine.
 
-    threshold_pct controls when a discrepancy is flagged. All overlapping
-    series are recorded regardless; threshold only governs the flagged
-    attribute. This keeps the full audit trail while highlighting what needs
-    human review.
+    threshold_pct controls when a discrepancy is flagged. min_abs_twh is an
+    absolute floor: when both spine and challenger values are below it, the
+    record is emitted with below_floor=True and flagged=False, preventing
+    near-zero-denominator artifacts from dominating the flag list. Set
+    min_abs_twh=0.0 to disable the floor entirely.
     """
 
     DEFAULT_THRESHOLD_PCT = 5.0
+    DEFAULT_MIN_ABS_TWH = 1.0
 
-    def __init__(self, threshold_pct: float = DEFAULT_THRESHOLD_PCT) -> None:
+    def __init__(
+        self,
+        threshold_pct: float = DEFAULT_THRESHOLD_PCT,
+        min_abs_twh: float = DEFAULT_MIN_ABS_TWH,
+    ) -> None:
         if threshold_pct <= 0:
             raise ValueError(f"threshold_pct must be positive, got {threshold_pct!r}")
+        if min_abs_twh < 0:
+            raise ValueError(f"min_abs_twh must be >= 0, got {min_abs_twh!r}")
         self.threshold_pct = threshold_pct
+        self.min_abs_twh = min_abs_twh
 
     # ------------------------------------------------------------------
     # Public API
@@ -145,6 +159,17 @@ class ReconciliationEngine:
                 pct_delta = None
                 flagged = False
 
+            # Suppress flag when both values are below the absolute floor.
+            # The record is still emitted; below_floor=True routes it to a
+            # separate bucket so trace-amount noise doesn't crowd out real flags.
+            below_floor = (
+                self.min_abs_twh > 0
+                and abs(spine_val) < self.min_abs_twh
+                and abs(challenger_val) < self.min_abs_twh
+            )
+            if below_floor:
+                flagged = False
+
             records.append(DiscrepancyRecord(
                 geography=series_key.geography,
                 energy_type=series_key.energy_type,
@@ -160,6 +185,7 @@ class ReconciliationEngine:
                 abs_delta=abs_delta,
                 pct_delta=pct_delta,
                 flagged=flagged,
+                below_floor=below_floor,
                 threshold_pct=self.threshold_pct,
                 detected_at=detected_at,
             ))
@@ -170,20 +196,28 @@ class ReconciliationEngine:
         """Return only the records that exceeded the threshold."""
         return [d for d in log if d.flagged]
 
+    def floor_suppressed(self, log: list[DiscrepancyRecord]) -> list[DiscrepancyRecord]:
+        """Return records where both values were below min_abs_twh (flag suppressed)."""
+        return [d for d in log if d.below_floor]
+
     def summary(self, log: list[DiscrepancyRecord]) -> dict:
         """Aggregate statistics over a discrepancy log."""
         if not log:
-            return {"total": 0, "flagged": 0, "flag_rate_pct": 0.0, "by_source": {}}
+            return {"total": 0, "flagged": 0, "below_floor": 0, "flag_rate_pct": 0.0, "by_source": {}}
         n_flagged = sum(1 for d in log if d.flagged)
+        n_floor = sum(1 for d in log if d.below_floor)
         by_source: dict[str, dict] = {}
         for d in log:
-            s = by_source.setdefault(d.challenger_source_id, {"total": 0, "flagged": 0})
+            s = by_source.setdefault(d.challenger_source_id, {"total": 0, "flagged": 0, "below_floor": 0})
             s["total"] += 1
             if d.flagged:
                 s["flagged"] += 1
+            if d.below_floor:
+                s["below_floor"] += 1
         return {
             "total": len(log),
             "flagged": n_flagged,
+            "below_floor": n_floor,
             "flag_rate_pct": round(n_flagged / len(log) * 100, 1),
             "by_source": by_source,
         }

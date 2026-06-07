@@ -387,3 +387,104 @@ def test_empty_spine_returns_empty(engine):
 def test_empty_challenger_returns_empty(engine):
     spine = [_fact(value=1000.0)]
     assert engine.compare(spine, []) == []
+
+
+# ---------------------------------------------------------------------------
+# 20. Absolute-magnitude floor (min_abs_twh)
+# ---------------------------------------------------------------------------
+
+def test_both_below_floor_not_flagged(engine):
+    # 0.5 vs 0.8 TWh → 60% delta, but both < 1.0 TWh floor → flag suppressed.
+    spine = [_fact(value=0.5)]
+    challenger = [_fact(source_id="eia_international", value=0.8)]
+    log = engine.compare(spine, challenger)
+    assert len(log) == 1
+    assert log[0].below_floor is True
+    assert log[0].flagged is False
+    assert log[0].pct_delta == pytest.approx(60.0)
+
+
+def test_below_floor_record_still_emitted(engine):
+    # below_floor records must appear in compare() output — not silently dropped.
+    spine = [_fact(value=0.1)]
+    challenger = [_fact(source_id="eia_international", value=0.2)]
+    log = engine.compare(spine, challenger)
+    assert len(log) == 1
+    assert log[0].below_floor is True
+
+
+def test_one_above_one_below_evaluated_normally(engine):
+    # spine below floor, challenger above — floor does NOT apply; normal pct logic runs.
+    spine = [_fact(value=0.5)]
+    challenger = [_fact(source_id="eia_international", value=2.0)]
+    log = engine.compare(spine, challenger)
+    assert len(log) == 1
+    assert log[0].below_floor is False
+    assert log[0].flagged is True   # (2.0 - 0.5) / 0.5 * 100 = 300% > 5%
+
+
+def test_both_above_floor_unaffected(engine):
+    # Both well above floor → normal flag behaviour unchanged.
+    spine = [_fact(value=100.0)]
+    challenger = [_fact(source_id="eia_international", value=200.0)]
+    log = engine.compare(spine, challenger)
+    assert len(log) == 1
+    assert log[0].below_floor is False
+    assert log[0].flagged is True   # 100% > 5%
+
+
+def test_custom_min_abs_twh():
+    engine5 = ReconciliationEngine(min_abs_twh=5.0)
+    spine = [_fact(value=3.0)]
+    challenger = [_fact(source_id="eia_international", value=4.0)]
+    log = engine5.compare(spine, challenger)
+    assert log[0].below_floor is True   # both < 5.0
+    assert log[0].flagged is False      # 33% delta suppressed by floor
+
+
+def test_floor_zero_disables_suppression():
+    # min_abs_twh=0.0 means no floor: tiny-value pct deltas are still flagged.
+    engine0 = ReconciliationEngine(min_abs_twh=0.0)
+    spine = [_fact(value=0.1)]
+    challenger = [_fact(source_id="eia_international", value=0.2)]
+    log = engine0.compare(spine, challenger)
+    assert log[0].below_floor is False
+    assert log[0].flagged is True   # 100% > 5%, no floor to suppress it
+
+
+def test_floor_suppressed_filter(engine):
+    spine = [
+        _fact(energy_type=EnergyType.COAL, value=0.3),    # below floor
+        _fact(energy_type=EnergyType.GAS,  value=1000.0), # above floor
+    ]
+    challenger = [
+        _fact(source_id="eia_international", energy_type=EnergyType.COAL, value=0.5),    # below floor
+        _fact(source_id="eia_international", energy_type=EnergyType.GAS,  value=1200.0), # above floor, flagged
+    ]
+    log = engine.compare(spine, challenger)
+    assert len(log) == 2
+    suppressed = engine.floor_suppressed(log)
+    assert len(suppressed) == 1
+    assert suppressed[0].energy_type is EnergyType.COAL
+
+
+def test_summary_reports_below_floor(engine):
+    spine = [
+        _fact(energy_type=EnergyType.COAL, value=0.3),
+        _fact(energy_type=EnergyType.GAS,  value=1000.0),
+    ]
+    challenger = [
+        _fact(source_id="eia_international", energy_type=EnergyType.COAL, value=0.5),
+        _fact(source_id="eia_international", energy_type=EnergyType.GAS,  value=1200.0),
+    ]
+    log = engine.compare(spine, challenger)
+    s = engine.summary(log)
+    assert s["total"] == 2
+    assert s["below_floor"] == 1
+    assert s["flagged"] == 1
+    assert s["by_source"]["eia_international"]["below_floor"] == 1
+
+
+def test_invalid_min_abs_twh_raises():
+    with pytest.raises(ValueError, match="min_abs_twh"):
+        ReconciliationEngine(min_abs_twh=-1.0)
