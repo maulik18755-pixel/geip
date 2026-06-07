@@ -106,25 +106,37 @@ _STEO_RAW: list[dict[str, Any]] = [
     },
 ]
 
-# IEO: two scenarios, both future
+# IEO: two rows matching the real /v2/ieo/2023/data/ response shape.
+# tableId=20 "Net electricity generation by region and fuel", unit="bill kWh".
+# One Reference row + one HighMacro row so scenario-mapping tests cover both paths.
 _IEO_RAW: list[dict[str, Any]] = [
     {
         "period": "2035",
-        "regionName": "World",
-        "value": "600",
-        "unit": "quad BTU",
-        "caseId": "REF2024",
-        "seriesDescription": "Total energy consumption",
-        "releaseDate": "2024-01-01",
+        "history": "PROJECTION",
+        "scenario": "Reference",
+        "scenarioDescription": "Reference case",
+        "tableId": "20",
+        "tableName": "Net electricity generation by region and fuel",
+        "seriesId": "elec_gen_cl_bkwh",
+        "seriesName": "Net generation : Coal",
+        "regionId": "6-0",
+        "regionName": "Total World",
+        "value": "9000",
+        "unit": "bill kWh",
     },
     {
         "period": "2035",
-        "regionName": "World",
-        "value": "650",
-        "unit": "quad BTU",
-        "caseId": "HM2024",
-        "seriesDescription": "Total energy consumption",
-        "releaseDate": "2024-01-01",
+        "history": "PROJECTION",
+        "scenario": "HighMacro",
+        "scenarioDescription": "High economic growth",
+        "tableId": "20",
+        "tableName": "Net electricity generation by region and fuel",
+        "seriesId": "elec_gen_lf_bkwh",
+        "seriesName": "Net generation : Liquid fuels",
+        "regionId": "6-0",
+        "regionName": "Total World",
+        "value": "700",
+        "unit": "bill kWh",
     },
 ]
 
@@ -319,6 +331,20 @@ def test_ieo_units_are_twh(ieo):
     assert all(f.unit == "TWh" for f in facts)
 
 
+def test_ieo_value_roundtrip(ieo):
+    # "bill kWh" → TWh factor is 1.0; 9000 bill kWh must stay 9000 TWh.
+    facts = ieo.normalize(_IEO_RAW)
+    coal = [f for f in facts if f.energy_type.value == "coal"]
+    assert coal
+    assert abs(coal[0].value - 9000.0) < 0.001
+
+
+def test_ieo_metric_is_electricity(ieo):
+    facts = ieo.normalize(_IEO_RAW)
+    from geip.core.schema import MetricFamily
+    assert all(f.metric_family == MetricFamily.ELECTRICITY for f in facts)
+
+
 def test_ieo_validate_ok(ieo):
     facts = ieo.normalize(_IEO_RAW)
     report = ieo.validate(facts)
@@ -335,6 +361,11 @@ def test_protocol_conformance_ieo(ieo):
 
 def test_to_twh_billion_kwh():
     assert _to_twh(1.0, "billion kWh") == 1.0
+
+
+def test_to_twh_bill_kwh():
+    # IEO API uses "bill kWh" as the unit string for billion kilowatt-hours
+    assert _to_twh(1.0, "bill kWh") == 1.0
 
 
 def test_to_twh_bkwh():

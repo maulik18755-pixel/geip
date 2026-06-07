@@ -37,6 +37,7 @@ _PAGE_SIZE = 5000
 # Any unit string NOT in this table causes a hard error — never guess.
 _UNIT_TO_TWH: dict[str, float] = {
     "billion kWh": 1.0,           # billion kWh == TWh exactly
+    "bill kWh": 1.0,              # IEO API unit string for billion kilowatt-hours
     "BkWh": 1.0,
     "BKWH": 1.0,                  # EIA API v2 unit code for billion kilowatt-hours
     "TWh": 1.0,
@@ -115,19 +116,33 @@ _STEO_SERIES: list[tuple[str, EnergyType, MetricFamily, str, str]] = [
 # STEO scenario label (single reference case)
 _STEO_SCENARIO = "reference"
 
-# IEO scenario labels mapped from EIA case names.
+# IEO 2023 release year — update when EIA publishes a newer edition.
+_IEO_RELEASE_YEAR = "2023"
+
+# IEO scenario labels as returned by /v2/ieo/{year}/data/.
 _IEO_SCENARIO_MAP: dict[str, str] = {
-    "REF2023":  "reference",
-    "HM2023":   "high_economic_growth",
-    "LM2023":   "low_economic_growth",
-    "HO2023":   "high_oil_price",
-    "LO2023":   "low_oil_price",
-    # IEO 2024 vintage names
-    "REF2024":  "reference",
-    "HM2024":   "high_economic_growth",
-    "LM2024":   "low_economic_growth",
-    "HO2024":   "high_oil_price",
-    "LO2024":   "low_oil_price",
+    "Reference":    "reference",
+    "HighMacro":    "high_economic_growth",
+    "LowMacro":     "low_economic_growth",
+    "HighOilPrice": "high_oil_price",
+    "LowOilPrice":  "low_oil_price",
+    "LowZTC":       "low_zero_carbon_tech",
+    "HighZTC":      "high_zero_carbon_tech",
+}
+
+# IEO tableId=20 "Net electricity generation by region and fuel" series → EnergyType.
+# Aggregate series ("Net generation : Renewables", "Net generation : Total") are absent
+# so they are silently skipped. Geothermal (~90 TWh) is folded into OTHER_RENEWABLE
+# in OWID and is small enough to omit here without material distortion.
+_IEO_ELEC_SERIES: dict[str, EnergyType] = {
+    "Net generation : Coal":                 EnergyType.COAL,
+    "Net generation : Liquid fuels":         EnergyType.OIL,
+    "Net generation : Natural gas":          EnergyType.GAS,
+    "Net generation : Nuclear":              EnergyType.NUCLEAR,
+    "Net generation : Renewables : Hydro":   EnergyType.HYDRO,
+    "Net generation : Renewables : Solar":   EnergyType.SOLAR,
+    "Net generation : Renewables : Wind":    EnergyType.WIND,
+    "Net generation : Renewables : Other":   EnergyType.OTHER_RENEWABLE,
 }
 
 
@@ -391,18 +406,20 @@ class EIAIEOConnector:
         self._client = _EIAClient(self._api_key)
 
     def fetch(self, since: Optional[date]) -> list[dict]:
-        # IEO data is available under the AEO route in EIA API v2 for international scenarios.
-        # The route is confirmed against GET /v2/aeo/ metadata at runtime.
+        # Route: /v2/ieo/{year}/data/ — versioned by release year.
+        # tableId=20 is "Net electricity generation by region and fuel" (bill kWh).
+        # AEO (/v2/aeo/) is US-only; IEO is the international dataset.
         params: dict[str, Any] = {
             "frequency": "annual",
             "data[0]": "value",
+            "facets[tableId][]": "20",
+            "facets[scenario][]": "Reference",
             "sort[0][column]": "period",
             "sort[0][direction]": "asc",
         }
         if since:
-            params["start"] = str(since.year + 1)
-        rows = self._client.get_all("aeo/data/", params)
-        return rows
+            params["start"] = str(since.year)
+        return self._client.get_all(f"ieo/{_IEO_RELEASE_YEAR}/data/", params)
 
     def normalize(self, raw: list[dict]) -> list[FactRecord]:
         if not raw:
@@ -410,6 +427,9 @@ class EIAIEOConnector:
         pull_ts = datetime.now(timezone.utc)
         facts: list[FactRecord] = []
         for row in raw:
+            etype = _IEO_ELEC_SERIES.get(row.get("seriesName", ""))
+            if etype is None:
+                continue  # aggregate or non-electricity series
             val = row.get("value")
             if val is None or val == "":
                 continue
@@ -417,39 +437,26 @@ class EIAIEOConnector:
                 fval = float(val)
             except (TypeError, ValueError):
                 continue
-            unit_str = row.get("unit", "")
             try:
-                twh = _to_twh(fval, unit_str)
+                twh = _to_twh(fval, row.get("unit", ""))
             except ValueError:
-                # Skip series with unmapped units rather than fabricating a conversion.
                 continue
             period_str = str(row.get("period", ""))
             try:
                 year = int(period_str[:4])
             except (ValueError, IndexError):
                 continue
-            case_id = row.get("caseId") or row.get("scenarioId") or ""
-            scenario = _IEO_SCENARIO_MAP.get(str(case_id))
-            if scenario is None:
-                # Use the raw case description if no mapped name; never drop the record.
-                scenario = row.get("caseDescription") or str(case_id) or "reference"
-            vintage_str = str(row.get("releaseDate", ""))
-            try:
-                vintage = date(int(vintage_str[:4]), 1, 1)
-            except (ValueError, IndexError):
-                vintage = date.today()
-            # TODO Phase 2: map EIA series descriptions to EnergyType + MetricFamily
-            energy_type_str = row.get("seriesDescription", "")
-            energy_type = _guess_energy_type(energy_type_str)
-            metric_family = _guess_metric_family(energy_type_str)
-            if energy_type is None or metric_family is None:
-                continue
+            scenario_raw = str(row.get("scenario", ""))
+            scenario = _IEO_SCENARIO_MAP.get(scenario_raw, scenario_raw.lower() or "reference")
+            # IEO responses carry no releaseDate field; use the release year as vintage.
+            vintage = date(int(_IEO_RELEASE_YEAR), 1, 1)
+            geography = (row.get("regionName") or "").strip()
             facts.append(FactRecord(
                 source_id=self.source_id,
-                geography=row.get("regionName") or row.get("areaName") or "World",
-                energy_type=energy_type,
-                metric="consumption",
-                metric_family=metric_family,
+                geography=geography,
+                energy_type=etype,
+                metric="electricity_generation",
+                metric_family=MetricFamily.ELECTRICITY,
                 period=date(year, 1, 1),
                 period_type="yearly",
                 value=twh,
@@ -471,37 +478,3 @@ class EIAIEOConnector:
         return ValidationReport(self.source_id, len(facts), len(errors), errors)
 
 
-# ---------------------------------------------------------------------------
-# Helpers for IEO series classification
-# ---------------------------------------------------------------------------
-
-def _guess_energy_type(description: str) -> Optional[EnergyType]:
-    desc = description.lower()
-    if "petroleum" in desc or "liquid" in desc or "oil" in desc:
-        return EnergyType.OIL
-    if "natural gas" in desc or "gas" in desc:
-        return EnergyType.GAS
-    if "coal" in desc:
-        return EnergyType.COAL
-    if "nuclear" in desc:
-        return EnergyType.NUCLEAR
-    if "hydro" in desc:
-        return EnergyType.HYDRO
-    if "solar" in desc:
-        return EnergyType.SOLAR
-    if "wind" in desc:
-        return EnergyType.WIND
-    if "renewable" in desc or "biofuel" in desc or "biomass" in desc or "geothermal" in desc:
-        return EnergyType.OTHER_RENEWABLE
-    if "total" in desc or "all" in desc:
-        return EnergyType.TOTAL
-    return None
-
-
-def _guess_metric_family(description: str) -> Optional[MetricFamily]:
-    desc = description.lower()
-    if "electricity" in desc or "generation" in desc or "power" in desc:
-        return MetricFamily.ELECTRICITY
-    if "energy" in desc or "consumption" in desc or "demand" in desc:
-        return MetricFamily.PRIMARY_ENERGY
-    return None
