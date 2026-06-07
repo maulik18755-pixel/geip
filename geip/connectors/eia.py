@@ -197,6 +197,7 @@ class EIAInternationalConnector:
                 "data[0]": "value",
                 "facets[productId][]": spec.product_id,
                 "facets[activityId][]": spec.activity_id,
+                "facets[unit][]": spec.eia_unit,
                 "sort[0][column]": "period",
                 "sort[0][direction]": "desc",
             }
@@ -228,6 +229,8 @@ class EIAInternationalConnector:
             except (TypeError, ValueError):
                 continue
             unit_str = row.get("unit", spec.eia_unit)
+            if unit_str != spec.eia_unit:
+                continue  # wrong unit variant (e.g. MT, TBPD) — not convertible without fuel-specific factors
             twh = _to_twh(fval, unit_str)
             try:
                 year = int(str(row["period"])[:4])
@@ -263,6 +266,19 @@ class EIAInternationalConnector:
                 errors.append(f"Negative value: {f.geography} {f.energy_type.value} {f.period}")
             if f.is_projection:
                 errors.append(f"International connector must not emit projections: {f}")
+        # If we got any facts, every configured series must be represented.
+        # A present-but-empty series means the API retired the unit code the
+        # fetch filter uses — a data gap that needs human attention.
+        if facts:
+            emitted = {(f.energy_type, f.metric, f.metric_family) for f in facts}
+            for spec in _INTERNATIONAL_SERIES:
+                key = (spec.energy_type, spec.metric, spec.metric_family)
+                if key not in emitted:
+                    errors.append(
+                        f"No facts for {spec.energy_type.value}/{spec.metric} "
+                        f"(productId={spec.product_id} activityId={spec.activity_id} "
+                        f"unit={spec.eia_unit}) — API may have retired this unit code"
+                    )
         return ValidationReport(self.source_id, len(facts), len(errors), errors)
 
 

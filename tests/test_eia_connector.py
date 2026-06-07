@@ -40,27 +40,21 @@ def _set_key(monkeypatch: pytest.MonkeyPatch) -> None:
 # Fixtures: minimal EIA API v2 response payloads
 # ---------------------------------------------------------------------------
 
-# International: two rows — one oil primary energy, one coal electricity.
-# Unit codes ("QBTU", "BKWH") match real EIA API v2 /international/data/ responses.
+# International: one row per configured spec — all 10 series.
+# Unit codes match real EIA API v2 /international/data/ responses.
 _INTL_RAW: list[dict[str, Any]] = [
-    {
-        "period": "2022",
-        "countryRegionName": "World",
-        "value": "200",
-        "unit": "QBTU",            # real API code: quadrillion Btu
-        "releaseDate": "2023-06-01",
-        "_spec_product_id": "5",   # Petroleum and other liquids
-        "_spec_activity_id": "2",
-    },
-    {
-        "period": "2022",
-        "countryRegionName": "World",
-        "value": "10000",
-        "unit": "BKWH",            # real API code: billion kilowatt-hours
-        "releaseDate": "2023-06-01",
-        "_spec_product_id": "30",  # Coal electricity generation
-        "_spec_activity_id": "12",
-    },
+    # Primary energy consumption (activityId=2, QBTU)
+    {"period": "2022", "countryRegionName": "World", "value": "200",   "unit": "QBTU", "releaseDate": "2023-06-01", "_spec_product_id": "5",   "_spec_activity_id": "2"},
+    {"period": "2022", "countryRegionName": "World", "value": "100",   "unit": "QBTU", "releaseDate": "2023-06-01", "_spec_product_id": "26",  "_spec_activity_id": "2"},
+    {"period": "2022", "countryRegionName": "World", "value": "150",   "unit": "QBTU", "releaseDate": "2023-06-01", "_spec_product_id": "7",   "_spec_activity_id": "2"},
+    # Electricity generation (activityId=12, BKWH)
+    {"period": "2022", "countryRegionName": "World", "value": "10000", "unit": "BKWH", "releaseDate": "2023-06-01", "_spec_product_id": "30",  "_spec_activity_id": "12"},
+    {"period": "2022", "countryRegionName": "World", "value": "6500",  "unit": "BKWH", "releaseDate": "2023-06-01", "_spec_product_id": "31",  "_spec_activity_id": "12"},
+    {"period": "2022", "countryRegionName": "World", "value": "900",   "unit": "BKWH", "releaseDate": "2023-06-01", "_spec_product_id": "32",  "_spec_activity_id": "12"},
+    {"period": "2022", "countryRegionName": "World", "value": "2700",  "unit": "BKWH", "releaseDate": "2023-06-01", "_spec_product_id": "27",  "_spec_activity_id": "12"},
+    {"period": "2022", "countryRegionName": "World", "value": "4400",  "unit": "BKWH", "releaseDate": "2023-06-01", "_spec_product_id": "33",  "_spec_activity_id": "12"},
+    {"period": "2022", "countryRegionName": "World", "value": "1800",  "unit": "BKWH", "releaseDate": "2023-06-01", "_spec_product_id": "116", "_spec_activity_id": "12"},
+    {"period": "2022", "countryRegionName": "World", "value": "2200",  "unit": "BKWH", "releaseDate": "2023-06-01", "_spec_product_id": "37",  "_spec_activity_id": "12"},
 ]
 
 # Verbatim row captured from GET /v2/international/data/ (productId=30, activityId=12,
@@ -181,7 +175,7 @@ def test_international_no_projections(intl):
 def test_international_metric_family_matches_series(intl):
     facts = intl.normalize(_INTL_RAW)
     families = {f.metric_family for f in facts}
-    # We sent one PRIMARY_ENERGY row and one ELECTRICITY row
+    # We sent three PRIMARY_ENERGY rows and seven ELECTRICITY rows
     assert MetricFamily.PRIMARY_ENERGY in families
     assert MetricFamily.ELECTRICITY in families
 
@@ -223,6 +217,21 @@ def test_international_validate_ok(intl):
     facts = intl.normalize(_INTL_RAW)
     report = intl.validate(facts)
     assert report.ok, report.errors
+
+
+def test_normalize_skips_wrong_unit_variant(intl):
+    """MT and other mass/volume units must be silently dropped, not crash via _to_twh."""
+    mt_row = dict(_INTL_RAW[0], unit="MT", value="5000000")
+    assert intl.normalize([mt_row]) == []
+
+
+def test_validate_flags_missing_series(intl):
+    """If one expected series produces no facts, validate() must flag it loudly."""
+    no_wind = [r for r in _INTL_RAW if r["_spec_product_id"] != "37"]
+    facts = intl.normalize(no_wind)
+    report = intl.validate(facts)
+    assert not report.ok
+    assert any("37" in e for e in report.errors), report.errors
 
 
 def test_protocol_conformance_international(intl):
