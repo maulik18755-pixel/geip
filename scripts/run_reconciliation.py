@@ -114,20 +114,27 @@ _SEP = "─"
 
 def _print_summary(engine: ReconciliationEngine, log: list[DiscrepancyRecord]) -> None:
     s = engine.summary(log)
+    n_total = s["total"]
     print()
     print("Summary")
     print(_SEP * 60)
-    print(f"  Total overlapping series : {s['total']:,}")
+    print(f"  Total overlapping series : {n_total:,}")
     print(f"  Flagged (|Δ| > {engine.threshold_pct:.1f}%)    : {s['flagged']:,}  ({s['flag_rate_pct']:.1f}%)")
+    if engine.min_abs_twh > 0:
+        floor_pct = s["below_floor"] / n_total * 100 if n_total else 0.0
+        print(
+            f"  Below floor (< {engine.min_abs_twh:.1f} TWh)  : "
+            f"{s['below_floor']:,}  ({floor_pct:.1f}%)"
+        )
     if s["by_source"]:
         print()
-        print(f"  {'Challenger source':<26}  {'Compared':>9}  {'Flagged':>8}  {'Flag %':>7}")
-        print(f"  {'─'*26}  {'─'*9}  {'─'*8}  {'─'*7}")
+        print(f"  {'Challenger source':<26}  {'Compared':>9}  {'Flagged':>8}  {'Suppressed':>10}  {'Flag %':>7}")
+        print(f"  {'─'*26}  {'─'*9}  {'─'*8}  {'─'*10}  {'─'*7}")
         for src, counts in s["by_source"].items():
             rate = counts["flagged"] / counts["total"] * 100 if counts["total"] else 0.0
             print(
                 f"  {src:<26}  {counts['total']:>9,}  "
-                f"{counts['flagged']:>8,}  {rate:>6.1f}%"
+                f"{counts['flagged']:>8,}  {counts['below_floor']:>10,}  {rate:>6.1f}%"
             )
 
 
