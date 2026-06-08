@@ -567,94 +567,199 @@ def main() -> None:
     hist_df = _load()
     geo_df = hist_df[hist_df["geography"] == geo]
 
-    if geo_df.empty:
-        st.title("Global Electricity Mix")
-        st.warning(f"No OWID electricity data found for '{geo}'.")
-        return
+    tab_dash, tab_arch = st.tabs(["Dashboard", "Architecture"])
 
-    latest_year = int(geo_df["year"].max())
-
-    # Load projection data for this geography (empty df if no IEO coverage)
-    proj_geo_df: pd.DataFrame | None = None
-    if forward:
-        all_proj = _load_projections()
-        if not all_proj.empty and geo in _OWID_TO_IEO:
-            proj_geo_df = all_proj[all_proj["geography"] == geo]
-            if proj_geo_df.empty:
-                proj_geo_df = None
-
-    st.title("Global Electricity Mix")
-
-    st.divider()
-
-    # 1. Bubble
-    bubble_title = f"Growth vs scale · {latest_year - 5}–{latest_year}"
-    if forward and proj_geo_df is not None:
-        bubble_title += f" + IEO to {_PROJ_TARGET_YEAR}"
-    st.subheader(bubble_title)
-    st.caption(
-        "Bubble size and y-axis both show current generation (TWh). "
-        "Right = fastest growing · Up = largest output."
-        + (f"  Hollow circles = IEO Reference {_PROJ_TARGET_YEAR}." if forward and proj_geo_df is not None else "")
-    )
-    st.plotly_chart(_bubble(geo_df, latest_year, proj_geo_df), use_container_width=True, config=_CHART_CONFIG)
-
-    st.divider()
-
-    # 2. Donut
-    st.subheader(f"Electricity mix · {geo} · {latest_year}")
-    st.plotly_chart(_donut(geo_df, latest_year), use_container_width=True, config=_CHART_CONFIG)
-
-    st.divider()
-
-    # 3. Stacked area
-    area_title = f"Generation by source · {geo}"
-    if forward and proj_geo_df is not None:
-        area_title += " + IEO to 2050"
-    st.subheader(area_title)
-    st.plotly_chart(_stacked_area(geo_df, proj_geo_df), use_container_width=True, config=_CHART_CONFIG)
-
-    # 4. Renewable Capacity
-    st.divider()
-    st.subheader("Wind & Solar — the bulk of new power-sector investment")
-    st.caption(
-        "Ember capacity data · wind & solar only · monthly, 2016–2026 · 30 geographies. "
-        "◆ marks aggregate regions (World, EU, G20, G7, OECD) — "
-        "compare only within the same tier."
-    )
-
-    if cap_geo:
-        all_cap = _load_capacity()
-        all_gen = _load_ember_gen()
-        cap_df = all_cap[all_cap["geography"] == cap_geo]
-        gen_df = all_gen[all_gen["geography"] == cap_geo]
-
-        if cap_df.empty:
-            st.info(f"No capacity data for '{_format_cap_geo(cap_geo)}'.")
+    with tab_dash:
+        if geo_df.empty:
+            st.title("Global Electricity Mix")
+            st.warning(f"No OWID electricity data found for '{geo}'.")
         else:
-            st.plotly_chart(_cap_trend(cap_df), use_container_width=True, config=_CHART_CONFIG)
+            latest_year = int(geo_df["year"].max())
 
-            cf = _cap_factors(cap_df, gen_df)
-            if cf:
-                cf_year = int(cap_df["period_dt"].dt.year.max())
-                for et, pct in cf.items():
-                    st.metric(
-                        label=f"{_LABELS.get(et, et)} capacity factor",
-                        value=f"{pct:.1f}%",
-                    )
-                st.caption(
-                    f"Capacity factor = annual generation ÷ (installed GW × 8,760 h). "
-                    f"Latest year with both capacity and generation data: {cf_year}."
-                )
-    else:
-        st.info("Select a capacity geography in the sidebar.")
+            # Load projection data for this geography (empty df if no IEO coverage)
+            proj_geo_df: pd.DataFrame | None = None
+            if forward:
+                all_proj = _load_projections()
+                if not all_proj.empty and geo in _OWID_TO_IEO:
+                    proj_geo_df = all_proj[all_proj["geography"] == geo]
+                    if proj_geo_df.empty:
+                        proj_geo_df = None
 
-    # 5. Caption
-    st.caption(
-        "Source: Our World in Data energy dataset (reconciliation spine). "
-        "Cross-checked against EIA International and Ember: 95.9% of 80,059 "
-        "overlapping series agree within ±5% (GEIP reconciliation run, June 2026)."
-    )
+            st.title("Global Electricity Mix")
+
+            st.divider()
+
+            # 1. Bubble
+            bubble_title = f"Growth vs scale · {latest_year - 5}–{latest_year}"
+            if forward and proj_geo_df is not None:
+                bubble_title += f" + IEO to {_PROJ_TARGET_YEAR}"
+            st.subheader(bubble_title)
+            st.caption(
+                "Bubble size and y-axis both show current generation (TWh). "
+                "Right = fastest growing · Up = largest output."
+                + (f"  Hollow circles = IEO Reference {_PROJ_TARGET_YEAR}." if forward and proj_geo_df is not None else "")
+            )
+            st.plotly_chart(_bubble(geo_df, latest_year, proj_geo_df), use_container_width=True, config=_CHART_CONFIG)
+
+            st.divider()
+
+            # 2. Donut
+            st.subheader(f"Electricity mix · {geo} · {latest_year}")
+            st.plotly_chart(_donut(geo_df, latest_year), use_container_width=True, config=_CHART_CONFIG)
+
+            st.divider()
+
+            # 3. Stacked area
+            area_title = f"Generation by source · {geo}"
+            if forward and proj_geo_df is not None:
+                area_title += " + IEO to 2050"
+            st.subheader(area_title)
+            st.plotly_chart(_stacked_area(geo_df, proj_geo_df), use_container_width=True, config=_CHART_CONFIG)
+
+            # 4. Renewable Capacity
+            st.divider()
+            st.subheader("Wind & Solar — the bulk of new power-sector investment")
+            st.caption(
+                "Ember capacity data · wind & solar only · monthly, 2016–2026 · 30 geographies. "
+                "◆ marks aggregate regions (World, EU, G20, G7, OECD) — "
+                "compare only within the same tier."
+            )
+
+            if cap_geo:
+                all_cap = _load_capacity()
+                all_gen = _load_ember_gen()
+                cap_df = all_cap[all_cap["geography"] == cap_geo]
+                gen_df = all_gen[all_gen["geography"] == cap_geo]
+
+                if cap_df.empty:
+                    st.info(f"No capacity data for '{_format_cap_geo(cap_geo)}'.")
+                else:
+                    st.plotly_chart(_cap_trend(cap_df), use_container_width=True, config=_CHART_CONFIG)
+
+                    cf = _cap_factors(cap_df, gen_df)
+                    if cf:
+                        cf_year = int(cap_df["period_dt"].dt.year.max())
+                        for et, pct in cf.items():
+                            st.metric(
+                                label=f"{_LABELS.get(et, et)} capacity factor",
+                                value=f"{pct:.1f}%",
+                            )
+                        st.caption(
+                            f"Capacity factor = annual generation ÷ (installed GW × 8,760 h). "
+                            f"Latest year with both capacity and generation data: {cf_year}."
+                        )
+            else:
+                st.info("Select a capacity geography in the sidebar.")
+
+            # 5. Caption
+            st.caption(
+                "Source: Our World in Data energy dataset (reconciliation spine). "
+                "Cross-checked against EIA International and Ember: 95.9% of 80,059 "
+                "overlapping series agree within ±5% (GEIP reconciliation run, June 2026)."
+            )
+
+    with tab_arch:
+        st.graphviz_chart("""
+digraph geip {
+    rankdir=TB
+    node [fontname="sans-serif" fontsize=11 style=filled fillcolor="#f0f4f8" color="#9aacbd"]
+    edge [color="#6b7f93"]
+
+    owid  [label="Our World in Data\n(spine)" fillcolor="#d4edda" color="#3a7d44"]
+    eia   [label="U.S. EIA"]
+    ember [label="Ember"]
+
+    owid_c  [label="Connector\n(fetch→normalize→validate)"]
+    eia_c   [label="Connector\n(fetch→normalize→validate)"]
+    ember_c [label="Connector\n(fetch→normalize→validate)"]
+
+    schema [label="Common Schema\n(vintage-aware fact store)" shape=cylinder]
+    recon  [label="Reconciliation Engine\n(compares sources,\nflags discrepancies)"]
+    cache  [label="Cached Snapshot\n(parquet)" shape=note]
+    dash   [label="Dashboard\n(this app)" shape=box fillcolor="#cce5ff" color="#0066cc"]
+
+    owid  -> owid_c
+    eia   -> eia_c
+    ember -> ember_c
+
+    owid_c  -> schema
+    eia_c   -> schema
+    ember_c -> schema
+
+    schema -> recon -> cache -> dash
+}
+""")
+        st.markdown("""
+## How this tool is built
+
+### Data sources
+
+GEIP draws from three free, authoritative public sources.
+
+**Our World in Data (OWID)** is the harmonized historical backbone. Its
+electricity dataset aggregates and cross-checks country-level figures from
+primary statistical agencies worldwide. Every chart is anchored to OWID, and
+it serves as the canonical reference against which all other sources are
+compared.
+
+**The U.S. Energy Information Administration (EIA)** supplies international
+energy data and long-range projections. The EIA's International Energy Outlook
+provides the forward-view scenarios shown when the "Forward view" toggle is on.
+
+**Ember** publishes near-real-time global power generation and installed
+capacity figures — monthly wind and solar data for roughly 30 geographies —
+enabling the capacity-factor analysis in the dashboard.
+
+---
+
+### Pipeline
+
+Each source has a dedicated connector that fetches, normalizes, and validates
+the data before it enters the system. The connectors share a common interface,
+so new sources can be added without touching existing logic.
+
+Every data point is stored as a self-describing record that carries its source,
+geography, energy type, metric, unit, and publication vintage. This means every
+number on screen is fully traceable to its origin — nothing is computed without
+a clear audit trail.
+
+---
+
+### Reconciliation
+
+Where sources overlap on the same country, year, and energy type, a
+reconciliation engine compares them series by series. Discrepancies above a
+threshold are flagged rather than resolved silently — the system does not pick a
+winner and hide the disagreement.
+
+A magnitude floor prevents the engine from raising alarms about percentage swings
+on near-zero values (for example, a small country's solar output doubling from
+0.01 TWh to 0.02 TWh is a 100% change that carries no practical significance).
+OWID is always the spine; EIA and Ember are compared against it, never the
+reverse.
+
+---
+
+### Key design principles
+
+- **Units before arithmetic.** Values are normalized to consistent units before
+  any calculation. Primary energy and electricity are tracked in separate
+  families and never combined.
+- **Projections stay separate.** Every projected data point is flagged.
+  Projections never appear inside historical totals or aggregates.
+- **Append-only, vintage-aware storage.** When a source revises a number, the
+  system creates a new record rather than overwriting the old one. The full
+  revision history is preserved.
+
+---
+
+### Current state
+
+The app reads from a recent static snapshot of the pipeline's output for fast,
+reliable loading. The full pipeline — live connectors, automated ingestion, and
+the reconciliation engine — exists and runs locally. The deployed version uses a
+cached extract of that output, updated periodically as sources publish new data.
+        """)
 
 
 if __name__ == "__main__":
