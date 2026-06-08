@@ -73,6 +73,8 @@ _OWID_TO_IEO = {v: k for k, v in _IEO_TO_OWID.items()}
 # IEO projection target year for the forward-view bubble overlay.
 _PROJ_TARGET_YEAR = 2035
 
+_CHART_CONFIG: dict = {"responsive": True, "displayModeBar": False}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -232,7 +234,7 @@ def _bubble(
         mode="markers+text",
         text=labels,
         textposition="top center",
-        textfont=dict(size=12, color="#333333"),
+        textfont=dict(size=10, color="#333333"),
         marker=dict(
             size=y_twh, sizemode="area", sizeref=sizeref,
             color=colors, opacity=0.82,
@@ -277,8 +279,9 @@ def _bubble(
         yaxis=dict(title="Generation (TWh)", tickformat=",",
                    showgrid=True, gridcolor="#ebebeb"),
         hovermode="closest",
-        margin=dict(l=70, r=40, t=40, b=60),
-        height=480,
+        autosize=True,
+        margin=dict(l=10, r=10, t=40, b=40),
+        height=420,
         plot_bgcolor="#f9f9f9",
         paper_bgcolor="#ffffff",
     )
@@ -304,7 +307,7 @@ def _donut(df: pd.DataFrame, year: int) -> go.Figure:
         marker_colors=[_COLORS.get(et, "#aaaaaa") for et in sub["energy_type"]],
         texttemplate="%{label}<br><b>%{percent:.1%}</b>",
         textposition="outside",
-        textfont_size=13,
+        textfont_size=11,
         hovertemplate="<b>%{label}</b><br>%{value:,.0f} TWh · %{percent:.1%}<extra></extra>",
         sort=False,
         direction="clockwise",
@@ -313,8 +316,9 @@ def _donut(df: pd.DataFrame, year: int) -> go.Figure:
         annotations=[{"text": centre, "x": 0.5, "y": 0.5,
                        "font": {"size": 20}, "showarrow": False}],
         showlegend=False,
-        margin=dict(l=120, r=120, t=60, b=60),
-        height=520,
+        autosize=True,
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=480,
         paper_bgcolor="#ffffff",
     )
     return fig
@@ -407,10 +411,11 @@ def _stacked_area(
         xaxis=dict(title=None, showgrid=False),
         yaxis=dict(title="TWh", showgrid=True, gridcolor="#e4e4e4", tickformat=","),
         hovermode="x unified",
-        legend=dict(orientation="v", x=1.01, y=1,
-                    xanchor="left", yanchor="top", font_size=13),
-        margin=dict(l=60, r=160, t=10, b=50),
-        height=480,
+        legend=dict(orientation="h", x=0, y=-0.15,
+                    xanchor="left", yanchor="top", font_size=12),
+        autosize=True,
+        margin=dict(l=40, r=10, t=10, b=80),
+        height=520,
         plot_bgcolor="#f9f9f9",
         paper_bgcolor="#ffffff",
     )
@@ -452,8 +457,9 @@ def _cap_trend(cap_df: pd.DataFrame) -> go.Figure:
         yaxis=dict(title="GW", showgrid=True, gridcolor="#e4e4e4", tickformat=","),
         hovermode="x unified",
         legend=dict(orientation="h", x=0, y=1.08, xanchor="left", font_size=13),
-        margin=dict(l=60, r=40, t=40, b=50),
-        height=380,
+        autosize=True,
+        margin=dict(l=40, r=10, t=40, b=10),
+        height=360,
         plot_bgcolor="#f9f9f9",
         paper_bgcolor="#ffffff",
     )
@@ -582,31 +588,31 @@ def main() -> None:
     st.divider()
 
     # 1. Bubble
-    bubble_title = f"Growth vs scale · 5-year CAGR ({latest_year - 5}–{latest_year})"
+    bubble_title = f"Growth vs scale · {latest_year - 5}–{latest_year}"
     if forward and proj_geo_df is not None:
-        bubble_title += f"  +  IEO projection to {_PROJ_TARGET_YEAR} (hollow)"
+        bubble_title += f" + IEO to {_PROJ_TARGET_YEAR}"
     st.subheader(bubble_title)
     st.caption(
         "Bubble size and y-axis both show current generation (TWh). "
         "Right = fastest growing · Up = largest output."
         + (f"  Hollow circles = IEO Reference {_PROJ_TARGET_YEAR}." if forward and proj_geo_df is not None else "")
     )
-    st.plotly_chart(_bubble(geo_df, latest_year, proj_geo_df), use_container_width=True)
+    st.plotly_chart(_bubble(geo_df, latest_year, proj_geo_df), use_container_width=True, config=_CHART_CONFIG)
 
     st.divider()
 
     # 2. Donut
-    st.subheader(f"{geo} electricity generation · {latest_year}")
-    st.plotly_chart(_donut(geo_df, latest_year), use_container_width=True)
+    st.subheader(f"Electricity mix · {geo} · {latest_year}")
+    st.plotly_chart(_donut(geo_df, latest_year), use_container_width=True, config=_CHART_CONFIG)
 
     st.divider()
 
     # 3. Stacked area
-    area_title = f"{geo} electricity generation by source · historical"
+    area_title = f"Generation by source · {geo}"
     if forward and proj_geo_df is not None:
-        area_title += " + IEO projection to 2050"
+        area_title += " + IEO to 2050"
     st.subheader(area_title)
-    st.plotly_chart(_stacked_area(geo_df, proj_geo_df), use_container_width=True)
+    st.plotly_chart(_stacked_area(geo_df, proj_geo_df), use_container_width=True, config=_CHART_CONFIG)
 
     # 4. Renewable Capacity
     st.divider()
@@ -626,18 +632,16 @@ def main() -> None:
         if cap_df.empty:
             st.info(f"No capacity data for '{_format_cap_geo(cap_geo)}'.")
         else:
-            st.plotly_chart(_cap_trend(cap_df), use_container_width=True)
+            st.plotly_chart(_cap_trend(cap_df), use_container_width=True, config=_CHART_CONFIG)
 
             cf = _cap_factors(cap_df, gen_df)
             if cf:
                 cf_year = int(cap_df["period_dt"].dt.year.max())
-                cols = st.columns(len(cf))
-                for i, (et, pct) in enumerate(cf.items()):
-                    with cols[i]:
-                        st.metric(
-                            label=f"{_LABELS.get(et, et)} capacity factor",
-                            value=f"{pct:.1f}%",
-                        )
+                for et, pct in cf.items():
+                    st.metric(
+                        label=f"{_LABELS.get(et, et)} capacity factor",
+                        value=f"{pct:.1f}%",
+                    )
                 st.caption(
                     f"Capacity factor = annual generation ÷ (installed GW × 8,760 h). "
                     f"Latest year with both capacity and generation data: {cf_year}."
